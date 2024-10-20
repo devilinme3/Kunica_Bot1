@@ -4,8 +4,52 @@ from aiogram import Bot, Dispatcher, types
 from aiogram.utils import executor
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
 from config import TOKEN
-from database import add_review, get_reviews_by_company, init_db, get_average_rating
-from moderation import send_review_for_moderation, approve_review, decline_review
+from database import add_review, get_reviews_by_company, init_db, get_average_rating, get_user_id_by_review_id, get_language_by_review_id, update_review_status
+from database_users import add_new_user, is_new_user, init_users_db
+from moderation import send_review_for_moderation
+
+# Словарь с переводами для разных языков
+translations = {
+    "Українська": {
+        "choose_language": "Виберіть мову:",
+        "choose_action": "Ви вибрали {language}. Тепер виберіть дію:",
+        "leave_review": "Залишити відгук",
+        "find_reviews": "Знайти відгуки",
+        "enter_company_name": "Введіть назву роботодавця (тільки латинськими літерами):",
+        "enter_rating": "Введіть оцінку від 1 до 5:",
+        "enter_comment": "Введіть коментар про роботодавця:",
+        "review_submitted": "Ваш відгук надіслано на модерацію. Дякуємо!",
+        "review_approved": "Ваш відгук був схвалений!",
+        "enter_company_for_search": "Введіть назву роботодавця для пошуку:",
+        "reviews_not_found": "Відгуки про цього роботодавця не знайдено."
+    },
+    "Русский": {
+        "choose_language": "Выберите язык:",
+        "choose_action": "Вы выбрали {language}. Теперь выберите действие:",
+        "leave_review": "Оставить отзыв",
+        "find_reviews": "Найти отзывы",
+        "enter_company_name": "Введите название работодателя (только латинскими буквами):",
+        "enter_rating": "Введите оценку от 1 до 5:",
+        "enter_comment": "Введите комментарий о работодателе:",
+        "review_submitted": "Ваш отзыв отправлен на модерацию. Спасибо!",
+        "review_approved": "Ваш отзыв был одобрен!",
+        "enter_company_for_search": "Введите название работодателя для поиска:",
+        "reviews_not_found": "Отзывы по данному работодателю не найдены."
+    },
+    "Polski": {
+        "choose_language": "Wybierz język:",
+        "choose_action": "Wybrałeś {language}. Teraz wybери działanie:",
+        "leave_review": "Zostaw recenzję",
+        "find_reviews": "Znajdź recenzje",
+        "enter_company_name": "Wprowadź nazwę pracodawcy (только litery łacińские):",
+        "enter_rating": "Wprowadź ocenę от 1 до 5:",
+        "enter_comment": "Wprowadź комментарий о работодателе:",
+        "review_submitted": "Twoja recenzja została przesłана до модерации. Дzięкуем!",
+        "review_approved": "Twoja recenzja została zatверджена!",
+        "enter_company_for_search": "Wprowadź nazwę pracodawcy для поиска:",
+        "reviews_not_found": "Nie znaleziono recenzji tego pracodawcy."
+    }
+}
 
 # Инициализация бота и диспетчера
 bot = Bot(token=TOKEN)
@@ -21,48 +65,68 @@ language_markup.add(KeyboardButton("Українська"), KeyboardButton("Ру
 # Стартовая команда /start
 @dp.message_handler(commands=['start'])
 async def start_command_handler(message: types.Message):
+    user_id = message.from_user.id
+    first_name = message.from_user.first_name
+    date_joined = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    # Проверяем, является ли пользователь новым
+    if await is_new_user(user_id):
+        # Добавляем нового пользователя в базу данных users.db
+        await add_new_user(user_id, first_name, date_joined)
+
     await message.answer("Выберите язык:", reply_markup=language_markup)
 
 # Обработчик выбора языка
 @dp.message_handler(lambda message: message.text in ["Українська", "Русский", "Polski"])
 async def language_selection_handler(message: types.Message):
     language = message.text
-    # Сохранение выбранного языка и отправка следующего меню
+    user_id = message.from_user.id
+
+    # Сохраняем выбранный язык в словаре данных пользователя
+    user_data[user_id] = {"language": language}
+
+    # Используем перевод для сообщения
+    translation = translations[language]
     markup = ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.add(KeyboardButton("Оставить отзыв"), KeyboardButton("Найти отзывы"))
-    await message.answer(f"Вы выбрали {language}. Теперь выберите действие:", reply_markup=markup)
+    markup.add(KeyboardButton(translation["leave_review"]), KeyboardButton(translation["find_reviews"]))
+
+    await message.answer(translation["choose_action"].format(language=language), reply_markup=markup)
 
 # Обработчик кнопки "Оставить отзыв"
-@dp.message_handler(lambda message: message.text == "Оставить отзыв")
+@dp.message_handler(lambda message: message.text in ["Оставить отзыв", "Залишити відгук", "Zostaw recenzję"])
 async def leave_review_handler(message: types.Message):
-    # Начало нового процесса для "Оставить отзыв"
-    await message.answer("Введите название работодателя (только латинскими буквами):")
-    user_data[message.from_user.id] = {"step": "leave_review"}  # Устанавливаем шаг для оставления отзыва
+    user_id = message.from_user.id
+    language = user_data[user_id]["language"]
+    translation = translations[language]
+    
+    await message.answer(translation["enter_company_name"])
+    user_data[user_id]["step"] = "leave_review"  # Инициализируем step
 
 # Обработчик пользовательского ввода для отзывов
-@dp.message_handler(lambda message: message.from_user.id in user_data and user_data[message.from_user.id]["step"] == "leave_review")
+@dp.message_handler(lambda message: message.from_user.id in user_data and "step" in user_data[message.from_user.id] and user_data[message.from_user.id]["step"] == "leave_review")
 async def process_review_data(message: types.Message):
-    user_id = message.from_user.id
-    step = user_data[user_id].get("step")
-
+    user_id = message.from_user.id  # Это Telegram ID пользователя
+    language = user_data[user_id]["language"]
+    translation = translations[language]
+    
     if "company_name" not in user_data[user_id]:  # Вводим название компании
         company_name = message.text.strip().lower()
         if not company_name.isalpha():
-            await message.answer("Название работодателя должно содержать только латинские буквы. Попробуйте снова.")
+            await message.answer(translation["enter_company_name"])
             return
         user_data[user_id]["company_name"] = company_name
-        await message.answer("Введите оценку от 1 до 5:")
+        await message.answer(translation["enter_rating"])
     elif "rating" not in user_data[user_id]:  # Вводим рейтинг
         try:
             rating = int(message.text)
             if rating < 1 or rating > 5:
-                await message.answer("Оценка должна быть от 1 до 5. Попробуйте снова.")
+                await message.answer(translation["enter_rating"])
                 return
         except ValueError:
-            await message.answer("Оценка должна быть числом от 1 до 5. Попробуйте снова.")
+            await message.answer(translation["enter_rating"])
             return
         user_data[user_id]["rating"] = rating
-        await message.answer("Введите комментарий о работодателе:")
+        await message.answer(translation["enter_comment"])
     elif "comment" not in user_data[user_id]:  # Вводим комментарий
         comment = message.text
         user_data[user_id]["comment"] = comment
@@ -73,28 +137,39 @@ async def process_review_data(message: types.Message):
         username = message.from_user.username
         date = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-        # Сохраняем отзыв в базу данных с пометкой "не подтвержден" и получаем review_id
-        review_id = await add_review(user_id, username, company_name, rating, comment, date)
+        # Сохраняем отзыв в базу данных с пометкой "не подтвержден" и добавляем язык
+        review_id = await add_review(user_id, username, company_name, rating, comment, date, language)
 
         # Отправляем отзыв на модерацию
-        await send_review_for_moderation(bot, review_id, username, company_name, rating, comment, date)
+        await send_review_for_moderation(bot, review_id, user_id, company_name, rating, comment, date)
 
-        await message.answer("Ваш отзыв отправлен на модерацию. Спасибо!")
+        await message.answer(translation["review_submitted"])
         # Завершение процесса: очищаем временные данные
         del user_data[user_id]
 
 # Обработчик кнопки "Найти отзывы"
-@dp.message_handler(lambda message: message.text == "Найти отзывы")
+@dp.message_handler(lambda message: message.text in ["Найти отзывы", "Знайти відгуки", "Znajdź recenzje"])
 async def find_reviews_handler(message: types.Message):
-    # Начало нового процесса для "Найти отзывы"
-    await message.answer("Введите название работодателя (игнорируется регистр):")
-    user_data[message.from_user.id] = {"step": "search"}  # Устанавливаем шаг для поиска отзывов
+    user_id = message.from_user.id
+
+    # Проверяем, что данные пользователя уже сохранены
+    if user_id not in user_data:
+        await message.answer("Пожалуйста, выберите язык сначала, используя команду /start.")
+        return
+
+    language = user_data[user_id]["language"]
+    translation = translations[language]
+    
+    await message.answer(translation["enter_company_for_search"])
+    user_data[user_id]["step"] = "search"
 
 # Поиск отзывов по названию компании с постраничным выводом
-@dp.message_handler(lambda message: message.from_user.id in user_data and user_data[message.from_user.id]["step"] == "search")
+@dp.message_handler(lambda message: message.from_user.id in user_data and "step" in user_data[message.from_user.id] and user_data[message.from_user.id]["step"] == "search")
 async def search_reviews(message: types.Message):
     company_name = message.text.strip().lower()  # Обработка названия компании
     user_id = message.from_user.id
+    language = user_data[user_id]["language"]
+    translation = translations[language]
 
     # Проверка: вызывается ли функция поиска
     await message.answer(f"Запуск поиска для компании: {company_name}")
@@ -104,10 +179,8 @@ async def search_reviews(message: types.Message):
     avg_rating = await get_average_rating(company_name)
 
     # Проверка результатов
-    await message.answer(f"Найдено {len(reviews)} отзывов для компании {company_name}")
-
     if not reviews:
-        await message.answer("Отзывы по данному работодателю не найдены.")
+        await message.answer(translation["reviews_not_found"])
         return
 
     # Сохраняем отзывы и начальную страницу для пользователя
@@ -125,6 +198,8 @@ async def show_reviews_page(message, user_id):
     reviews = user_data[user_id]["reviews"]
     company_name = user_data[user_id]["company_name"]
     avg_rating = user_data[user_id]["avg_rating"]
+    language = user_data[user_id]["language"]
+    translation = translations[language]
 
     # Рассчитываем диапазон для постраничного вывода
     items_per_page = 2
@@ -168,20 +243,28 @@ async def navigate_reviews(callback_query: types.CallbackQuery):
 @dp.callback_query_handler(lambda c: c.data.startswith('approve_'))
 async def process_approve(callback_query: types.CallbackQuery):
     review_id = callback_query.data.split('_')[1]
-    message_id = callback_query.message.message_id  # Получаем ID сообщения из канала модерации
-    user_id = callback_query.from_user.id  # ID пользователя, оставившего отзыв
-    await approve_review(bot, review_id, user_id, message_id, callback_query)
 
-# Обработчик для отклонения отзыва
-@dp.callback_query_handler(lambda c: c.data.startswith('decline_'))
-async def process_decline(callback_query: types.CallbackQuery):
-    review_id = callback_query.data.split('_')[1]
-    message_id = callback_query.message.message_id  # Получаем ID сообщения из канала модерации
-    user_id = callback_query.from_user.id  # ID пользователя, оставившего отзыв
-    await decline_review(bot, review_id, user_id, message_id, callback_query)
+    # Получаем ID сообщения из канала модерации, ID пользователя и язык отзыва
+    message_id = callback_query.message.message_id
+    user_id = await get_user_id_by_review_id(review_id)  # Получаем user_id из базы данных по review_id
+    language = await get_language_by_review_id(review_id)  # Получаем язык по review_id
+    translation = translations[language]  # Получаем переводы на нужном языке
+    
+    # Обновляем статус отзыва на "approved"
+    await update_review_status(review_id, "approved")
+    
+    # Отправляем пользователю уведомление об одобрении на его языке
+    try:
+        await bot.send_message(user_id, translation["review_approved"])  # Используем перевод "Ваш отзыв был одобрен!"
+    except Exception as e:
+        await bot.send_message(callback_query.from_user.id, f"Не удалось отправить сообщение пользователю: {e}")
+
+    # Удаляем сообщение из канала модерации после одобрения
+    await bot.delete_message(callback_query.message.chat.id, message_id)
 
 # Запуск бота
 if __name__ == '__main__':
     loop = asyncio.get_event_loop()
-    loop.run_until_complete(init_db())
+    loop.run_until_complete(init_db())  # Инициализация базы данных отзывов
+    loop.run_until_complete(init_users_db())  # Инициализация базы данных пользователей
     executor.start_polling(dp, skip_updates=True)
