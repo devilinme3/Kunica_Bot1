@@ -7,8 +7,8 @@ from database import update_review_status, delete_review
 async def send_review_for_moderation(bot: Bot, review_id: int, user_id: int, company_name: str, rating: int, comment: str, date: str):
     # Клавиатура для модерации
     markup = InlineKeyboardMarkup()
-    markup.add(InlineKeyboardButton("Одобрить", callback_data=f"approve_{review_id}"))
-    markup.add(InlineKeyboardButton("Отклонить", callback_data=f"decline_{review_id}"))
+    markup.add(InlineKeyboardButton("✅Одобрить", callback_data=f"approve_{review_id}"))
+    markup.add(InlineKeyboardButton("⭕️Отклонить", callback_data=f"decline_{review_id}"))
 
     # Сообщение на модерацию с ID пользователя (Telegram ID)
     text = (

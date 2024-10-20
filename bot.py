@@ -7,47 +7,54 @@ from config import TOKEN
 from database import add_review, get_reviews_by_company, init_db, get_average_rating, get_user_id_by_review_id, get_language_by_review_id, update_review_status
 from database_users import add_new_user, is_new_user, init_users_db
 from moderation import send_review_for_moderation
+import os
+
+# Путь к файлу лицензионного соглашения в формате HTML
+LICENSE_FILE_PATH = os.path.join(os.getcwd(), "license.html")
 
 # Словарь с переводами для разных языков
 translations = {
     "Українська": {
         "choose_language": "Виберіть мову:",
         "choose_action": "Ви вибрали {language}. Тепер виберіть дію:",
-        "leave_review": "Залишити відгук",
-        "find_reviews": "Знайти відгуки",
+        "leave_review": "✍️ Залишити відгук",
+        "find_reviews": "🔍 Знайти відгуки",
         "enter_company_name": "Введіть назву роботодавця (тільки латинськими літерами):",
         "enter_rating": "Введіть оцінку від 1 до 5:",
         "enter_comment": "Введіть коментар про роботодавця:",
         "review_submitted": "Ваш відгук надіслано на модерацію. Дякуємо!",
         "review_approved": "Ваш відгук був схвалений!",
         "enter_company_for_search": "Введіть назву роботодавця для пошуку:",
-        "reviews_not_found": "Відгуки про цього роботодавця не знайдено."
+        "reviews_not_found": "Відгуки про цього роботодавця не знайдено.",
+        "license_sent": "Ми надіслали вам файл з ліцензійним договором у форматі HTML."
     },
     "Русский": {
         "choose_language": "Выберите язык:",
         "choose_action": "Вы выбрали {language}. Теперь выберите действие:",
-        "leave_review": "Оставить отзыв",
-        "find_reviews": "Найти отзывы",
+        "leave_review": "✍️ Оставить отзыв",
+        "find_reviews": "🔍 Найти отзывы",
         "enter_company_name": "Введите название работодателя (только латинскими буквами):",
         "enter_rating": "Введите оценку от 1 до 5:",
         "enter_comment": "Введите комментарий о работодателе:",
         "review_submitted": "Ваш отзыв отправлен на модерацию. Спасибо!",
         "review_approved": "Ваш отзыв был одобрен!",
         "enter_company_for_search": "Введите название работодателя для поиска:",
-        "reviews_not_found": "Отзывы по данному работодателю не найдены."
+        "reviews_not_found": "Отзывы по данному работодателю не найдены.",
+        "license_sent": "Мы отправили вам файл с лицензионным соглашением в формате HTML."
     },
     "Polski": {
         "choose_language": "Wybierz język:",
-        "choose_action": "Wybrałeś {language}. Teraz wybери działanie:",
-        "leave_review": "Zostaw recenzję",
-        "find_reviews": "Znajdź recenzje",
+        "choose_action": "Wybrałeś {language}. Teraz wybери działание:",
+        "leave_review": "✍️ Zostaw recenzję",
+        "find_reviews": "🔍 Znajdź recenzje",
         "enter_company_name": "Wprowadź nazwę pracodawcy (только litery łacińские):",
-        "enter_rating": "Wprowadź ocenę от 1 до 5:",
+        "enter_rating": "Wprowadź ocenę od 1 do 5:",
         "enter_comment": "Wprowadź комментарий о работодателе:",
-        "review_submitted": "Twoja recenzja została przesłана до модерации. Дzięкуем!",
-        "review_approved": "Twoja recenzja została zatверджена!",
-        "enter_company_for_search": "Wprowadź nazwę pracodawcy для поиска:",
-        "reviews_not_found": "Nie znaleziono recenzji tego pracodawcy."
+        "review_submitted": "Twoja recenzja została przesłана до модерации. Dzięкуем!",
+        "review_approved": "Twoja recenzja została затверджена!",
+        "enter_company_for_search": "Wprowadź nazwę pracodawcy do wyszukiwania:",
+        "reviews_not_found": "Nie znaleziono recenzji tego pracodawcy.",
+        "license_sent": "Wysłaliśmy Ci plik z umową licencyjną w formacie HTML."
     }
 }
 
@@ -58,28 +65,45 @@ dp = Dispatcher(bot)
 # Хранилище для временных данных пользователя (например, для отзывов и страниц)
 user_data = {}
 
-# Клавиатура для выбора языка
+# Клавиатура для выбора языка с эмодзи
 language_markup = ReplyKeyboardMarkup(resize_keyboard=True)
-language_markup.add(KeyboardButton("Українська"), KeyboardButton("Русский"), KeyboardButton("Polski"))
+language_markup.add(KeyboardButton("🇺🇦 Українська"), KeyboardButton("🇷🇺 Русский"), KeyboardButton("🇵🇱 Polski"))
 
 # Стартовая команда /start
 @dp.message_handler(commands=['start'])
 async def start_command_handler(message: types.Message):
     user_id = message.from_user.id
     first_name = message.from_user.first_name
-    date_joined = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    date_joined = datetime.datetime.now().strftime("%Y-%м-%d %H:%М:%S")
 
     # Проверяем, является ли пользователь новым
     if await is_new_user(user_id):
         # Добавляем нового пользователя в базу данных users.db
         await add_new_user(user_id, first_name, date_joined)
 
+        # Отправляем файл с лицензионным соглашением
+        await send_license_file(message)
+
     await message.answer("Выберите язык:", reply_markup=language_markup)
 
-# Обработчик выбора языка
-@dp.message_handler(lambda message: message.text in ["Українська", "Русский", "Polski"])
+# Отправка файла с лицензионным соглашением (HTML)
+async def send_license_file(message: types.Message):
+    language = user_data.get(message.from_user.id, {}).get("language", "Русский")  # Используем русский как язык по умолчанию
+    translation = translations[language]
+    
+    # Отправляем HTML-файл лицензионного соглашения
+    with open(LICENSE_FILE_PATH, 'rb') as license_file:
+        await bot.send_document(message.from_user.id, license_file, caption=translation["license_sent"])
+
+# Обработчик команды /license для получения файла лицензионного соглашения (HTML)
+@dp.message_handler(commands=['license'])
+async def license_command_handler(message: types.Message):
+    await send_license_file(message)
+
+# Обработчик выбора языка с учётом эмодзи
+@dp.message_handler(lambda message: message.text in ["🇺🇦 Українська", "🇷🇺 Русский", "🇵🇱 Polski"])
 async def language_selection_handler(message: types.Message):
-    language = message.text
+    language = message.text.split(' ')[1]  # Получаем язык без эмодзи
     user_id = message.from_user.id
 
     # Сохраняем выбранный язык в словаре данных пользователя
@@ -92,8 +116,8 @@ async def language_selection_handler(message: types.Message):
 
     await message.answer(translation["choose_action"].format(language=language), reply_markup=markup)
 
-# Обработчик кнопки "Оставить отзыв"
-@dp.message_handler(lambda message: message.text in ["Оставить отзыв", "Залишити відгук", "Zostaw recenzję"])
+# Обработчик кнопки "Оставить отзыв" с эмодзи
+@dp.message_handler(lambda message: message.text in ["✍️ Оставить отзыв", "✍️ Залишити відгук", "✍️ Zostaw recenzję"])
 async def leave_review_handler(message: types.Message):
     user_id = message.from_user.id
     language = user_data[user_id]["language"]
@@ -135,7 +159,7 @@ async def process_review_data(message: types.Message):
         rating = user_data[user_id]["rating"]
         comment = user_data[user_id]["comment"]
         username = message.from_user.username
-        date = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        date = datetime.datetime.now().strftime("%Y-%м-%d %H:%М:%S")
 
         # Сохраняем отзыв в базу данных с пометкой "не подтвержден" и добавляем язык
         review_id = await add_review(user_id, username, company_name, rating, comment, date, language)
@@ -147,8 +171,8 @@ async def process_review_data(message: types.Message):
         # Завершение процесса: очищаем временные данные
         del user_data[user_id]
 
-# Обработчик кнопки "Найти отзывы"
-@dp.message_handler(lambda message: message.text in ["Найти отзывы", "Знайти відгуки", "Znajdź recenzje"])
+# Обработчик кнопки "Найти отзывы" с эмодзи
+@dp.message_handler(lambda message: message.text in ["🔍 Найти отзывы", "🔍 Знайти відгуки", "🔍 Znajdź recenzje"])
 async def find_reviews_handler(message: types.Message):
     user_id = message.from_user.id
 
