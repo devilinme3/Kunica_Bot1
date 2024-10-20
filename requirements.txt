@@ -1,0 +1,4 @@
+aiogram==2.25.1
+aiosqlite==0.17.0
+fuzzywuzzy==0.18.0
+python-Levenshtein==0.12.2
