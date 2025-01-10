@@ -79,7 +79,7 @@ async def handle_approve(callback_query: types.CallbackQuery, bot):
             message_id=callback_query.message.message_id
         )
 
-        # Уведомляем модератора (alert). Можно отключить show_alert, если не нужно всплывающее окно
+        # Сообщение (alert) модератору (при желании show_alert можно выключить)
         await callback_query.answer("Отзыв одобрен.", show_alert=False)
 
     except Exception as e:
@@ -90,7 +90,7 @@ async def handle_approve(callback_query: types.CallbackQuery, bot):
 async def handle_reject(callback_query: types.CallbackQuery, bot):
     """
     Обрабатывает нажатие на кнопку "Отклонить":
-      1. Сначала получаем user_id из БД (пока отзыв ещё там).
+      1. Сначала получаем user_id (пока отзыв в базе).
       2. Удаляем отзыв из БД.
       3. Отправляем пользователю уведомление об отклонении.
       4. Удаляем сообщение из чата модерации.
@@ -99,7 +99,7 @@ async def handle_reject(callback_query: types.CallbackQuery, bot):
         _, city, review_id = callback_query.data.split("_")
         review_id = int(review_id)
 
-        # ВАЖНО: сначала получаем user_id, пока отзыв ещё не удалён
+        # Сначала узнаём user_id, пока отзыв не удалён
         user_id = get_user_id_by_review(city, review_id)
 
         # Удаляем отзыв
@@ -115,7 +115,7 @@ async def handle_reject(callback_query: types.CallbackQuery, bot):
             message_id=callback_query.message.message_id
         )
 
-        # Короткий ответ модератору
+        # Короткий ответ на колбэк
         await callback_query.answer("Отзыв отклонён.", show_alert=False)
 
     except Exception as e:
@@ -126,10 +126,14 @@ async def handle_reject(callback_query: types.CallbackQuery, bot):
 async def handle_user_reviews(callback_query: types.CallbackQuery, bot):
     """
     Показывает список отзывов конкретного пользователя (для модератора).
+    Исправляем ошибку too many values to unpack, используя rsplit("_", 1).
     """
     try:
-        _, user_id = callback_query.data.split("_")
-        user_id = int(user_id)
+        # callback_query.data может быть "user_reviews_12345"
+        # При обычном split("_") => ["user","reviews","12345"] (3 элемента)
+        # Поэтому используем rsplit("_", 1) => ["user_reviews","12345"]
+        prefix, user_id_str = callback_query.data.rsplit("_", 1)
+        user_id = int(user_id_str)
 
         total_count = get_user_reviews_count(user_id)
         if total_count == 0:
@@ -159,6 +163,8 @@ async def handle_user_reviews(callback_query: types.CallbackQuery, bot):
 async def navigate_user_reviews(callback_query: types.CallbackQuery, bot):
     """
     Листает (Назад/Вперёд) отзывы одного пользователя (для модератора).
+    Формат callback_data: "navigate_{user_id}_{page}"
+      -> split("_") вернёт [ "navigate", "12345", "0" ], что корректно
     """
     try:
         _, user_id, page = callback_query.data.split("_")
