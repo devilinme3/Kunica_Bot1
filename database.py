@@ -1,13 +1,16 @@
 import sqlite3
 from config import DATABASE_FILE
+from rapidfuzz import process, fuzz  # <-- Библиотека для fuzzy-поиска
 
 
 def init_db():
     """
-    Создаёт базу данных и необходимые таблицы, если их ещё нет.
+    Инициализация базы: создаёт таблицы reviews и users, если их нет.
     """
     conn = sqlite3.connect(DATABASE_FILE)
     cursor = conn.cursor()
+
+    # Таблица отзывов
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS reviews (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -21,6 +24,8 @@ def init_db():
             status TEXT DEFAULT 'pending'
         )
     """)
+
+    # Таблица пользователей (если используете для хранения языка и пр.)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
             user_id INTEGER PRIMARY KEY,
@@ -28,17 +33,18 @@ def init_db():
             language TEXT DEFAULT 'Русский'
         )
     """)
+
     conn.commit()
     conn.close()
-    print("База данных и таблицы успешно инициализированы.")
+    print("База данных и таблицы успешно инициализированы (или уже существуют).")
 
 
-def save_review(data):
+def save_review(data: dict) -> int:
     """
-    Сохраняет отзыв в базу данных.
-
-    :param data: Словарь с данными отзыва.
-    :return: ID добавленного отзыва.
+    Сохраняет отзыв в базе данных.
+    data должен содержать ключи:
+      user_id, user_name, employer, rating, comment, city, date, status
+    Возвращает ID добавленного отзыва.
     """
     conn = sqlite3.connect(DATABASE_FILE)
     cursor = conn.cursor()
@@ -62,13 +68,9 @@ def save_review(data):
     return review_id
 
 
-def save_user(user_id, user_name, language="Русский"):
+def save_user(user_id: int, user_name: str, language="Русский"):
     """
-    Сохраняет или обновляет информацию о пользователе.
-
-    :param user_id: ID пользователя.
-    :param user_name: Имя пользователя.
-    :param language: Выбранный язык пользователя.
+    Сохраняет (или игнорирует, если уже есть) пользователя в таблице users.
     """
     conn = sqlite3.connect(DATABASE_FILE)
     cursor = conn.cursor()
@@ -81,30 +83,86 @@ def save_user(user_id, user_name, language="Русский"):
     conn.close()
 
 
-def get_user_reviews_count(user_id):
+def get_user_language(user_id: int) -> str:
     """
-    Возвращает количество отзывов пользователя.
-
-    :param user_id: ID пользователя.
-    :return: Количество отзывов.
+    Возвращает язык пользователя, если есть запись,
+    иначе "Русский" по умолчанию.
     """
     conn = sqlite3.connect(DATABASE_FILE)
     cursor = conn.cursor()
-    query = "SELECT COUNT(*) FROM reviews WHERE user_id = ?"
+    query = "SELECT language FROM users WHERE user_id=?"
+    cursor.execute(query, (user_id,))
+    row = cursor.fetchone()
+    conn.close()
+    return row[0] if row else "Русский"
+
+
+def update_user_language(user_id: int, language: str):
+    """
+    Обновляет язык пользователя в таблице users.
+    """
+    conn = sqlite3.connect(DATABASE_FILE)
+    cursor = conn.cursor()
+    query = "UPDATE users SET language=? WHERE user_id=?"
+    cursor.execute(query, (language, user_id))
+    conn.commit()
+    conn.close()
+
+
+def approve_review(city: str, review_id: int):
+    """
+    Одобряет отзыв (меняет статус на 'approved').
+    """
+    conn = sqlite3.connect(DATABASE_FILE)
+    cursor = conn.cursor()
+    query = "UPDATE reviews SET status='approved' WHERE id=? AND city=?"
+    cursor.execute(query, (review_id, city))
+    conn.commit()
+    conn.close()
+
+
+def reject_review(city: str, review_id: int):
+    """
+    Отклоняет отзыв (удаляет запись из базы).
+    """
+    conn = sqlite3.connect(DATABASE_FILE)
+    cursor = conn.cursor()
+    query = "DELETE FROM reviews WHERE id=? AND city=?"
+    cursor.execute(query, (review_id, city))
+    conn.commit()
+    conn.close()
+
+
+def get_user_id_by_review(city: str, review_id: int):
+    """
+    Возвращает user_id по отзыву (по city и id).
+    """
+    conn = sqlite3.connect(DATABASE_FILE)
+    cursor = conn.cursor()
+    query = "SELECT user_id FROM reviews WHERE id=? AND city=?"
+    cursor.execute(query, (review_id, city))
+    row = cursor.fetchone()
+    conn.close()
+    return row[0] if row else None
+
+
+def get_user_reviews_count(user_id: int) -> int:
+    """
+    Возвращает количество отзывов пользователя (может использоваться модерацией).
+    """
+    conn = sqlite3.connect(DATABASE_FILE)
+    cursor = conn.cursor()
+    query = "SELECT COUNT(*) FROM reviews WHERE user_id=?"
     cursor.execute(query, (user_id,))
     count = cursor.fetchone()[0]
     conn.close()
     return count
 
 
-def get_user_reviews_paginated(user_id, page, limit=5):
+def get_user_reviews_paginated(user_id: int, page: int, limit=5) -> list:
     """
-    Возвращает отзывы пользователя с пагинацией.
-
-    :param user_id: ID пользователя.
-    :param page: Номер страницы.
-    :param limit: Количество записей на странице.
-    :return: Список отзывов.
+    Возвращает список отзывов пользователя (пагинация).
+    Сортируем по дате убывания.
     """
     offset = page * limit
     conn = sqlite3.connect(DATABASE_FILE)
@@ -117,87 +175,133 @@ def get_user_reviews_paginated(user_id, page, limit=5):
         LIMIT ? OFFSET ?
     """
     cursor.execute(query, (user_id, limit, offset))
-    reviews = [
-        {"employer": row[0], "rating": row[1], "comment": row[2], "date": row[3], "status": row[4]}
-        for row in cursor.fetchall()
-    ]
+    rows = cursor.fetchall()
     conn.close()
+
+    reviews = []
+    for row in rows:
+        reviews.append({
+            "employer": row[0],
+            "rating": row[1],
+            "comment": row[2],
+            "date": row[3],
+            "status": row[4],
+        })
     return reviews
 
 
-def approve_review(city, review_id):
+def search_approved_reviews(employer_query: str, page=0, limit=5) -> dict or None:
     """
-    Одобряет отзыв.
-
-    :param city: Город, к которому привязан отзыв.
-    :param review_id: ID отзыва.
-    """
-    conn = sqlite3.connect(DATABASE_FILE)
-    cursor = conn.cursor()
-    query = "UPDATE reviews SET status = 'approved' WHERE id = ? AND city = ?"
-    cursor.execute(query, (review_id, city))
-    conn.commit()
-    conn.close()
-
-
-def reject_review(city, review_id):
-    """
-    Отклоняет отзыв.
-
-    :param city: Город, к которому привязан отзыв.
-    :param review_id: ID отзыва.
+    Ищет отзывы со статусом 'approved' (одобренные) по 'fuzzy' поиску в названии работодателя.
+    
+    :param employer_query: Строка (латиница), которую ввёл пользователь.
+    :param page: Номер страницы (0-индексация).
+    :param limit: Кол-во отзывов на одной странице.
+    :return: dict со структурой:
+        {
+          "matched_employer": str,     # работодатель (lowercase), который мы выбрали по fuzzy
+          "total_reviews": int,        # общее число отзывов
+          "average_rating": float,     # средний рейтинг
+          "reviews": [ {...}, ... ],   # список отзывов (учитывая пагинацию)
+          "total_pages": int,          # общее кол-во страниц
+          "current_page": int          # текущая страница
+        }
+        или None, если ничего не найдено.
     """
     conn = sqlite3.connect(DATABASE_FILE)
     cursor = conn.cursor()
-    query = "DELETE FROM reviews WHERE id = ? AND city = ?"
-    cursor.execute(query, (review_id, city))
-    conn.commit()
+
+    # 1. Получаем список всех (уникальных) работодателей (lowercase), у которых status='approved'
+    cursor.execute("""
+        SELECT DISTINCT LOWER(employer)
+        FROM reviews
+        WHERE status='approved'
+    """)
+    all_employers = [row[0] for row in cursor.fetchall()]
+
+    if not all_employers:
+        conn.close()
+        return None  # нет ни одного одобренного отзыва
+
+    # 2. "Fuzzy" поиск по всем employer (lowercase)
+    query_lower = employer_query.lower()
+    best_match = process.extractOne(
+        query_lower,
+        all_employers,
+        scorer=fuzz.WRatio  # можно изменить стратегию
+    )
+    if not best_match:
+        conn.close()
+        return None
+
+    matched_employer = best_match[0]  # строка (lowercase), которая лучше всего совпала
+    score = best_match[1]            # оценка сходства (0..100)
+
+    # Если хотите отсеивать слишком низкое сходство:
+    # if score < 50:
+    #     conn.close()
+    #     return None
+
+    # 3. Получаем все отзывы, где LOWER(employer) = matched_employer, status='approved'
+    cursor.execute("""
+        SELECT id, user_id, user_name, employer, rating, comment, city, date
+        FROM reviews
+        WHERE LOWER(employer)=? AND status='approved'
+        ORDER BY date DESC
+    """, (matched_employer,))
+    rows = cursor.fetchall()
+
+    if not rows:
+        conn.close()
+        return None
+
+    total_reviews = len(rows)
+    # Средний рейтинг
+    avg_rating = sum([r[4] for r in rows]) / total_reviews  # r[4] = rating
+
+    # Пагинация
+    start = page * limit
+    end = start + limit
+    page_rows = rows[start:end]
+    total_pages = (total_reviews + limit - 1) // limit
+
+    # Преобразуем выбранные отзывы в список словарей
+    reviews_data = []
+    for row in page_rows:
+        reviews_data.append({
+            "id": row[0],
+            "user_id": row[1],
+            "user_name": row[2],
+            "employer": row[3],
+            "rating": row[4],
+            "comment": row[5],
+            "city": row[6],
+            "date": row[7],
+        })
+
     conn.close()
 
-
-def get_user_id_by_review(city, review_id):
-    """
-    Получает ID пользователя по отзыву.
-
-    :param city: Город, к которому привязан отзыв.
-    :param review_id: ID отзыва.
-    :return: ID пользователя или None.
-    """
-    conn = sqlite3.connect(DATABASE_FILE)
-    cursor = conn.cursor()
-    query = "SELECT user_id FROM reviews WHERE id = ? AND city = ?"
-    cursor.execute(query, (review_id, city))
-    result = cursor.fetchone()
-    conn.close()
-    return result[0] if result else None
+    return {
+        "matched_employer": matched_employer,
+        "total_reviews": total_reviews,
+        "average_rating": avg_rating,
+        "reviews": reviews_data,
+        "total_pages": total_pages,
+        "current_page": page
+    }
 
 
-def get_user_language(user_id):
-    """
-    Возвращает язык пользователя.
-
-    :param user_id: ID пользователя.
-    :return: Язык пользователя.
-    """
-    conn = sqlite3.connect(DATABASE_FILE)
-    cursor = conn.cursor()
-    query = "SELECT language FROM users WHERE user_id = ?"
-    cursor.execute(query, (user_id,))
-    result = cursor.fetchone()
-    conn.close()
-    return result[0] if result else "Русский"
-
-
-def update_user_language(user_id, language):
-    """
-    Обновляет язык пользователя.
-
-    :param user_id: ID пользователя.
-    :param language: Новый язык пользователя.
-    """
-    conn = sqlite3.connect(DATABASE_FILE)
-    cursor = conn.cursor()
-    query = "UPDATE users SET language = ? WHERE user_id = ?"
-    cursor.execute(query, (language, user_id))
-    conn.commit()
-    conn.close()
+# Если хотите, можете явно экспортировать функции через __all__:
+# __all__ = [
+#     "init_db",
+#     "save_review",
+#     "save_user",
+#     "get_user_language",
+#     "update_user_language",
+#     "approve_review",
+#     "reject_review",
+#     "get_user_id_by_review",
+#     "get_user_reviews_count",
+#     "get_user_reviews_paginated",
+#     "search_approved_reviews"
+# ]
